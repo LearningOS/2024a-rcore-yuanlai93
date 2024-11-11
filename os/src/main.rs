@@ -98,7 +98,7 @@ pub fn rust_main() -> ! {
     clear_bss();
     kernel_log_info();
     heap_alloc::init_heap();
-    trap::init();
+    trap::enable_timer_interrupt();
     loader::load_apps();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
