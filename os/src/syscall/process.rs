@@ -1,12 +1,30 @@
+
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM, mm::translated_struct_ptr, task::{
-        change_program_brk, current_user_token, exit_current_and_run_next, 
-        get_sys_call_times, suspend_current_and_run_next, TaskStatus,get_mmap,get_munmap
-    }, timer::get_time_us
+    config::{
+        MAX_SYSCALL_NUM,
+        PAGE_SIZE
+    },
+    task::{
+        change_program_brk, 
+        exit_current_and_run_next, 
+        suspend_current_and_run_next, 
+        TaskStatus,
+        current_user_token,
+        get_syscall_times,
+        get_time_first_called,
+        get_app_memory_set,
+    },
+    timer::{
+        get_time_us,
+        get_time_ms,
+    },
+    mm::{
+        translated_byte_buffer,
+        MapPermission,
+        VirtAddr,
+    },
 };
-
-
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -45,47 +63,118 @@ pub fn sys_yield() -> isize {
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
-    let ts=translated_struct_ptr(current_user_token(),_ts);
-    *ts = TimeVal {
+    let time_val = TimeVal {
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
+    let buffer = translated_byte_buffer(current_user_token(), _ts as *const u8, core::mem::size_of::<TimeVal>());
+    let mut time_value_ptr = &time_val as *const TimeVal as *const u8;
+    for byte in buffer {
+        for b in byte {
+            unsafe {
+                *b = *time_value_ptr;
+                time_value_ptr = time_value_ptr.add(1);
+            }
+        }
+    }
     0
-
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    let ti=translated_struct_ptr(current_user_token(),_ti);         
-    *ti = TaskInfo {
+    trace!("kernel: sys_task_info");
+    if _ti.is_null() {
+        return -1;
+    }
+    let buffer = translated_byte_buffer(current_user_token(), _ti as *const u8, core::mem::size_of::<TaskInfo>());
+    
+    let task_info = TaskInfo {
         status: TaskStatus::Running,
-        syscall_times: get_sys_call_times(),
-        time: get_time_us() /1000,
+        syscall_times: get_syscall_times(), 
+        time: get_time_ms() - get_time_first_called(), 
     };
 
+    let mut task_info_ptr = &task_info as *const TaskInfo as *const u8;
+    for byte in buffer {
+        for b in byte {
+            unsafe {
+                *b = *task_info_ptr;
+                task_info_ptr = task_info_ptr.add(1);
+            }
+        }
+    }
+
+    0
+
+}
+
+
+// YOUR JOB: Implement mmap.
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    // return -1;
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    }
+
+    if port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+    
+    let mut permission = MapPermission::U;
+    if (port & 0x1) != 0 { permission |= MapPermission::R; }
+    if (port & 0x2) != 0 { permission |= MapPermission::W; }
+    if (port & 0x4) != 0 { permission |= MapPermission::X; }
+    let page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let memory_set = get_app_memory_set();
+    for i in 0..page_count {
+        let vpa = VirtAddr(start + i * PAGE_SIZE);
+        unsafe {
+            match (*memory_set).translate(vpa.into()) {
+                Some(pte) => {
+                    if pte.is_valid() {
+                        return -1;
+                    }
+                }
+                None => {}
+            }
+        }
+
+    }
+    unsafe {
+        (*memory_set).insert_framed_area(start.into(), (start + len).into(), permission);
+    }
     0
 }
 
-// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    if _len==0{
-        return 0;
-    }
-    if _port & !0x7 != 0 || _port & 0x7 == 0 {
+// YOUR JOB: Implement munmap.
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel: sys_munmap");
+    if start % PAGE_SIZE != 0 {
         return -1;
     }
-    get_mmap(_start,_len,_port)
-    
-}
+    let page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let memory_set = get_app_memory_set();
+    for i in 0..page_count {
+        let vpa = VirtAddr(start + i * PAGE_SIZE);
+        unsafe {
+            match (*memory_set).translate(vpa.into()) {
+                Some(pte) => {
+                    if !pte.is_valid() {
+                        return -1;
+                    } 
+                }
+                None => {}
+            }
+        }
+    }
+    unsafe{
+        (*memory_set).pop(VirtAddr::from(start).into());
+    }
+    0
 
-// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    get_munmap(_start,_len)
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

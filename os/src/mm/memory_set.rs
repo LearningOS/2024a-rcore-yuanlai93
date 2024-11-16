@@ -34,9 +34,6 @@ lazy_static! {
         Arc::new(unsafe { UPSafeCell::new(MemorySet::new_kernel()) });
 }
 /// address space
-/// PageTable 下 挂着所有多级页表的节点所在的物理页帧，
-/// 而每个 MapArea 下则挂着对应逻辑段中的数据所在的物理页帧，
-/// 这两部分 合在一起构成了一个地址空间所需的所有物理页帧
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
@@ -66,30 +63,21 @@ impl MemorySet {
             None,
         );
     }
-    ///
-    pub fn delete_framed_area(&mut self, va_start: VirtPageNum, va_end: VirtPageNum) -> isize {
-        let mut va_start=va_start;
-        while va_start != va_end {
-            // println!("unmap va_start = {}", va_start.0);
-            if let Some(item) = self.page_table.translate(va_start) {
-                if !item.is_valid() {
-                    debug!("unmap on no map vpn");
-                    return -1;
-                }
-            } else {
-                return -1;
-            }
-            self.page_table.unmap(va_start);
-            va_start.step();
-        }
-        0
-    }
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+    }
+    /// pop the area with the start vpn
+    pub fn pop(&mut self, vpn: VirtPageNum) {
+        let areas = &mut self.areas;
+        for area in areas {
+            if vpn == area.vpn_range.get_start() {
+                area.unmap(&mut self.page_table);
+            }
+        }
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -283,7 +271,6 @@ impl MemorySet {
             false
         }
     }
-
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

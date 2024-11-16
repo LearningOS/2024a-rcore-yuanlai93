@@ -17,13 +17,15 @@ mod task;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
+use crate::mm::MemorySet;
+use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_ms;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
 pub use context::TaskContext;
-use crate::config::MAX_SYSCALL_NUM;
+
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -38,6 +40,7 @@ pub struct TaskManager {
     num_app: usize,
     /// use inner value to get mutable access
     inner: UPSafeCell<TaskManagerInner>,
+
 }
 
 /// The task manager inner in 'UPSafeCell'
@@ -153,30 +156,12 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
-    ///
-    fn increase_sys_call(&self, sys_id:usize){
+    fn get_app_memory_set(&self) -> *mut MemorySet {
         let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].sys_call_times[sys_id]+=1;
+        let cur = inner.current_task;
+        &mut inner.tasks[cur].memory_set
     }
-    ///
-    fn get_sys_call_times(&self)->[u32;MAX_SYSCALL_NUM]{
-        let inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].sys_call_times.clone()
-    }
-    ///
-    fn get_mmap(&self, start: usize, len: usize, port: usize)->isize{
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].mmap(start, len, port)
-    }
-    ///
-    fn get_munmap(&self,start: usize, len: usize)->isize{
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].munmap(start, len)
-    }
+
 }
 
 /// Run the first task in task list.
@@ -227,20 +212,31 @@ pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
 }
 
-/// Increases the syscall counter for the specified syscall ID.
-pub fn increase_sys_call(sys_id:usize) {
-    TASK_MANAGER.increase_sys_call(sys_id);
-}
-/// Populates the `TaskInfo` structure with the current task's information.
-pub fn get_sys_call_times()-> [u32; MAX_SYSCALL_NUM] {
-    TASK_MANAGER.get_sys_call_times()
+/// get_time_first_called
+pub fn get_time_first_called() -> usize {
+    let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+    TASK_MANAGER.inner.exclusive_access().tasks[current_task].time_first_called
 }
 
-/// Increases the syscall counter for the specified syscall ID.
-pub fn get_mmap( _start: usize, _len: usize, _port: usize)->isize {
-    TASK_MANAGER.get_mmap( _start, _len, _port)
+/// get_syscall_times
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+    TASK_MANAGER.inner.exclusive_access().tasks[current_task].syscall_times
 }
-/// Populates the `TaskInfo` structure with the current task's information.
-pub fn get_munmap( _start: usize, _len: usize)->isize {
-    TASK_MANAGER.get_munmap( _start, _len)
+
+/// update_time_first_called
+pub fn update_time_first_called() {
+    let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+    if 0 == TASK_MANAGER.inner.exclusive_access().tasks[current_task].time_first_called {
+        TASK_MANAGER.inner.exclusive_access().tasks[current_task].time_first_called = get_time_ms();
+    }
+}
+/// update_syscall_times
+pub fn update_syscall_times(syscall_id: usize) {
+    let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+    TASK_MANAGER.inner.exclusive_access().tasks[current_task].syscall_times[syscall_id] += 1;
+}
+/// get_app_memory_set
+pub fn get_app_memory_set() -> *mut MemorySet {
+    TASK_MANAGER.get_app_memory_set()
 }
