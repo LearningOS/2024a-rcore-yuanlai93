@@ -1,38 +1,25 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, PhysAddr, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
-//use crate::mm::page_table::_core::mem;
 
-//页表项中的标志位 PTEFlags
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
-        /// Valid (page is present).
         const V = 1 << 0;
-        /// Readable.
         const R = 1 << 1;
-        /// Writable.
         const W = 1 << 2;
-        /// Executable.
         const X = 1 << 3;
-        /// User-accessible.
         const U = 1 << 4;
-        /// Global mapping.
         const G = 1 << 5;
-        /// Accessed (page has been accessed).
         const A = 1 << 6;
-        /// Dirty (page has been written to).
         const D = 1 << 7;
     }
 }
 
 #[derive(Copy, Clone)]
-//让编译器自动为 PageTableEntry 实现 Copy/Clone Trait，
-//来让这个类型以值语义赋值/传参的时候 不会发生所有权转移，
-//而是拷贝一份新的副本。
 #[repr(C)]
 /// page table entry structure
 pub struct PageTableEntry {
@@ -42,7 +29,6 @@ pub struct PageTableEntry {
 
 impl PageTableEntry {
     /// Create a new page table entry
-    /// 从一个物理页号 PhysPageNum 和一个页表项标志位 PTEFlags 生成一个页表项
     pub fn new(ppn: PhysPageNum, flags: PTEFlags) -> Self {
         PageTableEntry {
             bits: ppn.0 << 10 | flags.bits as usize,
@@ -60,7 +46,6 @@ impl PageTableEntry {
     pub fn flags(&self) -> PTEFlags {
         PTEFlags::from_bits(self.bits as u8).unwrap()
     }
-    /// 快速判断一个页表项的 V/R/W/X 标志位是否为 1
     /// The page pointered by page table entry is valid?
     pub fn is_valid(&self) -> bool {
         (self.flags() & PTEFlags::V) != PTEFlags::empty()
@@ -84,8 +69,7 @@ pub struct PageTable {
     root_ppn: PhysPageNum,
     frames: Vec<FrameTracker>,
 }
-/// 因此 PageTable 要保存它根节点的物理页号 root_ppn 作为页表唯一的区分标志。
-/// 此外， 向量 frames 以 FrameTracker 的形式保存了页表所有的节点（包括根节点）所在的物理页帧。
+
 /// Assume that it won't oom when creating/mapping.
 impl PageTable {
     /// Create a new page table
@@ -104,9 +88,7 @@ impl PageTable {
         }
     }
     /// Find PageTableEntry by VirtPageNum, create a frame for a 4KB page table if not exist
-    /// 接受一个 PageTable 实例的可变引用（&mut self）和一个 VirtPageNum 类型的虚拟页号（vpn）
     fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
-        // 将虚拟页号分解成三个索引值，存储在变量 idxs 中
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
         let mut result: Option<&mut PageTableEntry> = None;
@@ -189,39 +171,3 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
-
-/// Translate&Copy a *mut T to a mutable T through page table
-pub fn translated_struct_ptr<T>(token: usize, ptr: *mut T) -> &'static mut T {
-    let page_table = PageTable::from_token(token);
-    let va = VirtAddr::from(ptr as usize);
-    let page_off = va.page_offset();
-    let vpn = va.floor();
-    let mut pa: PhysAddr = page_table.translate(vpn).unwrap().ppn().into();
-    pa.0 += page_off;
-    pa.get_mut()
-}
-/*
-pub fn translated_struct_ptr<T>(token: usize, ptr: *mut T) -> &'static mut T {
-    let page_table = PageTable::from_token(token);
-    let mut start = ptr as usize;
-    let end = start + mem::size_of::<T>();
-    let mut v = Vec::new();
-    while start < end {
-        let start_va = VirtAddr::from(start);
-        let mut vpn = start_va.floor();
-        let ppn = page_table.translate(vpn).unwrap().ppn();
-        vpn.step();
-        let mut end_va: VirtAddr = vpn.into();
-        end_va = end_va.min(VirtAddr::from(end));
-        if end_va.page_offset() == 0 {
-            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..]);
-        } else {
-            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..end_va.page_offset()]);
-        }
-        start = end_va.into();
-    }
-    unsafe { &mut *(v.as_mut_ptr() as *mut T) }
-    
-}
-*/
-
